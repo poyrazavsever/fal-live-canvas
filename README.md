@@ -1,36 +1,91 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Fal Live Canvas
 
-## Getting Started
+Fal Live Canvas, solda cizim yapip sagda AI ile fotogercekci gorsel ureten bir Next.js App Router projesidir.
 
-First, run the development server:
+## Ozellikler
+
+- 512x512 canvas cizim alani
+- Renk secimi (color picker)
+- Manuel uretim akisi (Olustur butonu)
+- Uretim sirasinda yukleniyor durumu ve UI geri bildirimi
+- Sunucu tarafi Route Handler ile FAL API anahtari korumasi
+- Nano Banana Pro edit modeli ile sketch -> photorealistic donusum
+
+## Teknoloji
+
+- Next.js 16 (App Router)
+- React 19 + TypeScript
+- Tailwind CSS v4
+- @fal-ai/client
+
+## Kurulum
+
+1. Bagimliliklari yukleyin:
+
+```bash
+npm install
+```
+
+2. Proje kok dizininde .env.local olusturun veya duzenleyin:
+
+```env
+FAL_KEY=your_fal_key_here
+```
+
+3. Gelistirme sunucusunu baslatin:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+4. Tarayicida acin:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+http://localhost:3000
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Kullanim
 
-## Learn More
+1. Sol panelde canvas ustunde bir cizim yapin.
+2. Kalem rengini color picker ile degistirin.
+3. Olustur butonuna basin.
+4. Sag panelde AI ciktisini gorun.
 
-To learn more about Next.js, take a look at the following resources:
+## API Akisi
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Frontend Fal API'ye direkt gitmez.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- Frontend -> POST /api/generate
+- Route Handler -> Fal modeli cagrisi
+- Sonuc -> imageUrl olarak frontend'e doner
 
-## Deploy on Vercel
+Boylece FAL_KEY sadece sunucuda kullanilir.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Kullanilan Model
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Model ID: fal-ai/nano-banana-pro/edit
+- Tip: image-to-image edit
+
+Route varsayilan olarak su sekilde cagirir:
+
+- image_urls: [canvas data URL]
+- aspect_ratio: 1:1
+- resolution: 1K
+- output_format: jpeg
+- num_images: 1
+
+Not: Nano Banana Pro ucretli bir modeldir. Her uretim maliyet olusturur.
+
+## Scriptler
+
+```bash
+npm run dev
+npm run build
+npm run start
+npm run lint
+```
+
+## Onemli Dosyalar
+
+- app/page.tsx: Cizim arayuzu ve istemci akisi
+- app/api/generate/route.ts: Sunucu tarafi Fal entegrasyonu
+- app/layout.tsx: Uygulama layout ve font ayari
+- app/globals.css: Global stiller
