@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 const CANVAS_SIZE = 512;
 const DRAWING_SYNC_DEBOUNCE_MS = 120;
-const AUTO_UPDATE_INTERVAL_MS = 500;
+const CANVAS_EXPORT_QUALITY = 0.82;
 const AI_PLACEHOLDER = `data:image/svg+xml;utf8,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><rect width="512" height="512" fill="#f3f4f6"/><path d="M56 392l112-128 80 96 64-72 144 104" fill="none" stroke="#9ca3af" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/><circle cx="188" cy="164" r="38" fill="#d1d5db"/><text x="50%" y="470" font-size="28" text-anchor="middle" fill="#6b7280" font-family="Arial, sans-serif">AI Gorsel Alani</text></svg>',
 )}`;
@@ -22,58 +22,17 @@ type GenerateApiResponse = {
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const isDrawingRef = useRef(false);
-  const isGeneratingRef = useRef(false);
   const lastPointRef = useRef<Point | null>(null);
   const drawingSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
-  const autoUpdateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastAutoUpdateAtRef = useRef(0);
-  const hasPendingAutoUpdateRef = useRef(false);
+  const activeRequestControllerRef = useRef<AbortController | null>(null);
+  const generationRequestIdRef = useRef(0);
   const [drawingData, setDrawingData] = useState("");
   const [generatedImageUrl, setGeneratedImageUrl] = useState("");
-  const [isAutoUpdateEnabled, setIsAutoUpdateEnabled] = useState(false);
+  const [brushColor, setBrushColor] = useState("#000000");
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationError, setGenerationError] = useState("");
-
-  useEffect(() => {
-    isGeneratingRef.current = isGenerating;
-
-    if (
-      !isGenerating &&
-      isAutoUpdateEnabled &&
-      isDrawingRef.current &&
-      hasPendingAutoUpdateRef.current
-    ) {
-      hasPendingAutoUpdateRef.current = false;
-
-      const elapsed = Date.now() - lastAutoUpdateAtRef.current;
-      const waitTime = Math.max(AUTO_UPDATE_INTERVAL_MS - elapsed, 0);
-
-      if (autoUpdateTimerRef.current) {
-        clearTimeout(autoUpdateTimerRef.current);
-      }
-
-      autoUpdateTimerRef.current = setTimeout(() => {
-        autoUpdateTimerRef.current = null;
-
-        if (!isAutoUpdateEnabled || !isDrawingRef.current) {
-          return;
-        }
-
-        const nextDrawingData = syncDrawingData();
-
-        if (!nextDrawingData || isGeneratingRef.current) {
-          return;
-        }
-
-        lastAutoUpdateAtRef.current = Date.now();
-        void generateImageFromCanvas(nextDrawingData, {
-          showValidationError: false,
-        });
-      }, waitTime);
-    }
-  }, [isGenerating, isAutoUpdateEnabled]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -102,8 +61,8 @@ export default function Home() {
         clearTimeout(drawingSyncTimerRef.current);
       }
 
-      if (autoUpdateTimerRef.current) {
-        clearTimeout(autoUpdateTimerRef.current);
+      if (activeRequestControllerRef.current) {
+        activeRequestControllerRef.current.abort();
       }
     };
   }, []);
@@ -134,7 +93,10 @@ export default function Home() {
       return "";
     }
 
-    const nextDrawingData = canvas.toDataURL("image/png");
+    const nextDrawingData = canvas.toDataURL(
+      "image/jpeg",
+      CANVAS_EXPORT_QUALITY,
+    );
     setDrawingData(nextDrawingData);
     return nextDrawingData;
   };
@@ -148,62 +110,6 @@ export default function Home() {
       syncDrawingData();
       drawingSyncTimerRef.current = null;
     }, DRAWING_SYNC_DEBOUNCE_MS);
-  };
-
-  const queueAutoUpdate = () => {
-    if (!isAutoUpdateEnabled || !isDrawingRef.current) {
-      return;
-    }
-
-    const elapsed = Date.now() - lastAutoUpdateAtRef.current;
-    const shouldRunNow = elapsed >= AUTO_UPDATE_INTERVAL_MS;
-
-    if (shouldRunNow) {
-      if (isGeneratingRef.current) {
-        hasPendingAutoUpdateRef.current = true;
-        return;
-      }
-
-      const nextDrawingData = syncDrawingData();
-
-      if (!nextDrawingData) {
-        return;
-      }
-
-      lastAutoUpdateAtRef.current = Date.now();
-      void generateImageFromCanvas(nextDrawingData, {
-        showValidationError: false,
-      });
-      return;
-    }
-
-    if (autoUpdateTimerRef.current) {
-      return;
-    }
-
-    autoUpdateTimerRef.current = setTimeout(() => {
-      autoUpdateTimerRef.current = null;
-
-      if (!isAutoUpdateEnabled || !isDrawingRef.current) {
-        return;
-      }
-
-      if (isGeneratingRef.current) {
-        hasPendingAutoUpdateRef.current = true;
-        return;
-      }
-
-      const nextDrawingData = syncDrawingData();
-
-      if (!nextDrawingData) {
-        return;
-      }
-
-      lastAutoUpdateAtRef.current = Date.now();
-      void generateImageFromCanvas(nextDrawingData, {
-        showValidationError: false,
-      });
-    }, AUTO_UPDATE_INTERVAL_MS - elapsed);
   };
 
   const generateImageFromCanvas = async (
@@ -220,6 +126,14 @@ export default function Home() {
       return;
     }
 
+    if (activeRequestControllerRef.current) {
+      activeRequestControllerRef.current.abort();
+    }
+
+    const controller = new AbortController();
+    activeRequestControllerRef.current = controller;
+    const requestId = ++generationRequestIdRef.current;
+
     setIsGenerating(true);
     setGenerationError("");
 
@@ -230,9 +144,14 @@ export default function Home() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ image_url }),
+        signal: controller.signal,
       });
 
       const payload = (await response.json()) as GenerateApiResponse;
+
+      if (requestId !== generationRequestIdRef.current) {
+        return;
+      }
 
       if (!response.ok) {
         throw new Error(payload.error ?? "API istegi basarisiz oldu.");
@@ -246,11 +165,22 @@ export default function Home() {
 
       setGeneratedImageUrl(imageUrl);
     } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+
+      if (requestId !== generationRequestIdRef.current) {
+        return;
+      }
+
       const message =
         error instanceof Error ? error.message : "Fal istegi basarisiz oldu.";
       setGenerationError(message);
     } finally {
-      setIsGenerating(false);
+      if (requestId === generationRequestIdRef.current) {
+        activeRequestControllerRef.current = null;
+        setIsGenerating(false);
+      }
     }
   };
 
@@ -270,12 +200,10 @@ export default function Home() {
 
     isDrawingRef.current = true;
     lastPointRef.current = point;
-    lastAutoUpdateAtRef.current = Date.now();
-    hasPendingAutoUpdateRef.current = false;
 
     ctx.beginPath();
     ctx.arc(point.x, point.y, 2, 0, Math.PI * 2);
-    ctx.fillStyle = "#000000";
+    ctx.fillStyle = brushColor;
     ctx.fill();
   };
 
@@ -297,6 +225,7 @@ export default function Home() {
       return;
     }
 
+    ctx.strokeStyle = brushColor;
     ctx.beginPath();
     ctx.moveTo(lastPointRef.current.x, lastPointRef.current.y);
     ctx.lineTo(nextPoint.x, nextPoint.y);
@@ -304,7 +233,6 @@ export default function Home() {
 
     lastPointRef.current = nextPoint;
     syncDrawingDataDebounced();
-    queueAutoUpdate();
   };
 
   const stopDrawing = () => {
@@ -320,20 +248,7 @@ export default function Home() {
       drawingSyncTimerRef.current = null;
     }
 
-    if (autoUpdateTimerRef.current) {
-      clearTimeout(autoUpdateTimerRef.current);
-      autoUpdateTimerRef.current = null;
-    }
-
-    hasPendingAutoUpdateRef.current = false;
-
-    const nextDrawingData = syncDrawingData();
-
-    if (nextDrawingData) {
-      void generateImageFromCanvas(nextDrawingData, {
-        showValidationError: false,
-      });
-    }
+    syncDrawingData();
   };
 
   const handleClear = () => {
@@ -357,63 +272,139 @@ export default function Home() {
       drawingSyncTimerRef.current = null;
     }
 
-    if (autoUpdateTimerRef.current) {
-      clearTimeout(autoUpdateTimerRef.current);
-      autoUpdateTimerRef.current = null;
+    if (activeRequestControllerRef.current) {
+      activeRequestControllerRef.current.abort();
+      activeRequestControllerRef.current = null;
+      generationRequestIdRef.current += 1;
     }
-
-    hasPendingAutoUpdateRef.current = false;
 
     setDrawingData("");
     setGeneratedImageUrl("");
     setGenerationError("");
+    setIsGenerating(false);
+  };
+
+  const handleGenerateClick = () => {
+    const latestDrawingData = syncDrawingData();
+    void generateImageFromCanvas(latestDrawingData);
   };
 
   return (
-    <main className="pageShell">
-      <div className="workspace">
-        <section className="panel">
-          <h2 className="panelTitle">Canvas Cizim Alani</h2>
-          <canvas
-            ref={canvasRef}
-            width={CANVAS_SIZE}
-            height={CANVAS_SIZE}
-            className="drawingCanvas"
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={stopDrawing}
-            onMouseLeave={stopDrawing}
-          />
-          <button type="button" className="clearButton" onClick={handleClear}>
-            Temizle
-          </button>
-          <label className="autoUpdateToggle">
-            <input
-              type="checkbox"
-              checked={isAutoUpdateEnabled}
-              onChange={(event) => setIsAutoUpdateEnabled(event.target.checked)}
-            />
-            Auto-Update (mousemove sirasinda her 500ms)
-          </label>
-          {generationError ? (
-            <p className="errorText">{generationError}</p>
-          ) : null}
-        </section>
+    <main className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_15%_20%,#fff7ed_0%,#f5f3ff_32%,#eef2ff_100%)]">
+      <div className="pointer-events-none absolute -left-20 top-10 h-72 w-72 rounded-full bg-amber-300/40 blur-3xl" />
+      <div className="pointer-events-none absolute -right-20 bottom-16 h-80 w-80 rounded-full bg-cyan-300/40 blur-3xl" />
 
-        <section className="panel">
-          <h2 className="panelTitle">AI Gorsel Ciktisi</h2>
-          <div className="imageFrame">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={generatedImageUrl || drawingData || AI_PLACEHOLDER}
-              alt="Uretilen AI gorseli"
-              width={CANVAS_SIZE}
-              height={CANVAS_SIZE}
-              className={`resultImage${isGenerating ? " resultImageLoading" : ""}`}
-            />
-          </div>
-          {isGenerating ? <p className="statusText">Uretiliyor...</p> : null}
-        </section>
+      <div className="relative mx-auto flex w-full max-w-[1400px] flex-col gap-6 px-4 py-6 md:px-8 md:py-10">
+        <header className="rounded-3xl border border-white/60 bg-white/70 p-5 shadow-[0_12px_40px_rgba(15,23,42,0.08)] backdrop-blur md:p-7">
+          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">
+            Live Sketch to Image
+          </p>
+          <h1 className="mt-2 text-2xl font-bold text-slate-900 md:text-4xl">
+            Cizimini AI ile Aninda Sahneye Donustur
+          </h1>
+          <p className="mt-2 max-w-2xl text-sm text-slate-600 md:text-base">
+            Solda renkli cizimini yap, sonra Olustur butonuna bas. Fal modeli,
+            cizimini referans alarak yeni bir gorsele cevirir.
+          </p>
+        </header>
+
+        <div className="grid min-h-[70vh] gap-6 lg:grid-cols-2">
+          <section className="flex flex-col gap-4 rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-[0_14px_40px_rgba(15,23,42,0.09)] backdrop-blur md:p-6">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold text-slate-900 md:text-xl">
+                Canvas Cizim Alani
+              </h2>
+              <span className="rounded-full bg-slate-900 px-3 py-1 text-xs font-medium text-white">
+                512 x 512
+              </span>
+            </div>
+
+            <div className="grid place-items-center rounded-2xl border border-slate-200 bg-slate-50 p-3">
+              <canvas
+                ref={canvasRef}
+                width={CANVAS_SIZE}
+                height={CANVAS_SIZE}
+                className="aspect-square w-full max-w-[512px] cursor-crosshair rounded-xl border border-slate-300 bg-white shadow-inner"
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={stopDrawing}
+                onMouseLeave={stopDrawing}
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <label
+                htmlFor="brushColor"
+                className="text-sm font-medium text-slate-700"
+              >
+                Kalem Rengi
+              </label>
+              <input
+                id="brushColor"
+                type="color"
+                className="h-10 w-14 cursor-pointer rounded-lg border border-slate-300 bg-transparent p-1"
+                value={brushColor}
+                onChange={(event) => setBrushColor(event.target.value)}
+              />
+              <button
+                type="button"
+                onClick={handleClear}
+                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700"
+              >
+                Temizle
+              </button>
+              <button
+                type="button"
+                onClick={handleGenerateClick}
+                disabled={isGenerating}
+                className="rounded-xl bg-gradient-to-r from-emerald-600 to-cyan-600 px-5 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isGenerating ? "Uretiliyor..." : "Olustur"}
+              </button>
+            </div>
+
+            {generationError ? (
+              <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                {generationError}
+              </p>
+            ) : null}
+          </section>
+
+          <section className="flex flex-col gap-4 rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-[0_14px_40px_rgba(15,23,42,0.09)] backdrop-blur md:p-6">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold text-slate-900 md:text-xl">
+                AI Gorsel Ciktisi
+              </h2>
+              {isGenerating ? (
+                <span className="rounded-full bg-cyan-100 px-3 py-1 text-xs font-semibold text-cyan-800">
+                  Isleniyor
+                </span>
+              ) : (
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                  Hazir
+                </span>
+              )}
+            </div>
+
+            <div className="grid flex-1 place-items-center rounded-2xl border border-slate-200 bg-gradient-to-br from-white to-slate-100 p-3">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={generatedImageUrl || drawingData || AI_PLACEHOLDER}
+                alt="Uretilen AI gorseli"
+                width={CANVAS_SIZE}
+                height={CANVAS_SIZE}
+                className={`aspect-square w-full max-w-[512px] rounded-xl border border-slate-300 bg-white shadow-sm transition ${
+                  isGenerating ? "animate-pulse opacity-55" : "opacity-100"
+                }`}
+              />
+            </div>
+
+            <p className="text-sm text-slate-500">
+              Ipucu: Daha net cizgiler ve belirgin sekiller, modelin daha
+              anlamli sonuc uretmesini saglar.
+            </p>
+          </section>
+        </div>
       </div>
     </main>
   );

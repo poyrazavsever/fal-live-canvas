@@ -1,13 +1,12 @@
 import { fal } from "@fal-ai/client";
 import { NextResponse } from "next/server";
 
-const MODEL_ID = "fal-ai/lcm-sd15-i2i";
+const MODEL_ID = "fal-ai/nano-banana-pro/edit";
 const DEFAULT_PROMPT =
-  "masterpiece, detailed, vibrant, high quality image, preserve the sketch composition";
-const DEFAULT_NEGATIVE_PROMPT =
-  "black image, blank image, low contrast, underexposed, very dark, blurry, noisy";
-const DEFAULT_STRENGTH = 0.6;
-const DEFAULT_NUM_INFERENCE_STEPS = 4;
+  "Interpret this rough sketch as a real-world scene and render a photorealistic image. Infer the subject from the drawing semantics (e.g. flower sketch -> real flower photo, stick figure -> real person), keep the same subject layout and pose, and add natural textures, realistic lighting, and camera-like detail. Do not output line-art, anime, cartoon, or illustration style.";
+const DEFAULT_ASPECT_RATIO = "1:1";
+const DEFAULT_RESOLUTION = "1K";
+const DEFAULT_OUTPUT_FORMAT = "jpeg";
 
 type GenerateRequestBody = {
   image_url?: string;
@@ -58,15 +57,16 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await fal.subscribe(MODEL_ID, {
+    const result = await fal.run(MODEL_ID, {
       input: {
         prompt: DEFAULT_PROMPT,
-        image_url: body.image_url,
-        negative_prompt: DEFAULT_NEGATIVE_PROMPT,
-        sync_mode: true,
-        strength: DEFAULT_STRENGTH,
-        num_inference_steps: DEFAULT_NUM_INFERENCE_STEPS,
-        enable_safety_checks: false,
+        image_urls: [body.image_url],
+        aspect_ratio: DEFAULT_ASPECT_RATIO,
+        resolution: DEFAULT_RESOLUTION,
+        output_format: DEFAULT_OUTPUT_FORMAT,
+        sync_mode: false,
+        limit_generations: true,
+        enable_web_search: false,
         num_images: 1,
       },
     });
